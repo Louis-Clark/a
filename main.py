@@ -42,7 +42,7 @@ async def get_ai_response(user_message, context_messages=None):
         
         # Make the API call
         completion = client.chat.completions.create(
-            model="dphn/Dolphin-Mistral-24B-Venice-Edition:featherless-ai",
+            model="dphn/Dolphin-Mistral-24B-Venice-Edition",
             messages=messages,
             max_tokens=500,  # Limit response length
             temperature=0.7  # Slight randomness for natural responses
