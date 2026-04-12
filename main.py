@@ -1,17 +1,12 @@
 import os
 import discord
+import requests
+import json
 from discord.ext import commands
-from openai import OpenAI
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
-
-# Initialize OpenAI client for Hugging Face inference
-client = OpenAI(
-    base_url="https://router.huggingface.co",
-    api_key=os.environ.get("HF_TOKEN"),
-)
 
 # Discord bot setup
 intents = discord.Intents.default()
@@ -19,40 +14,90 @@ intents.message_content = True  # Required to read message content
 intents.messages = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Store conversation history per channel/user for context (optional)
+# Store conversation history per channel/user for context
 conversation_history = {}
+
+# Hugging Face API configuration
+HF_API_URL = "https://api-inference.huggingface.co/models/microsoft/Phi-3-mini-4k-instruct"
+HF_HEADERS = {"Authorization": f"Bearer {os.environ.get('HF_TOKEN')}"}
 
 async def get_ai_response(user_message, context_messages=None):
     """
-    Get response from the Hugging Face model
+    Get response from the Hugging Face model using requests
     """
     try:
-        # Prepare messages array for the API
-        messages = []
+        # Build conversation prompt
+        prompt = build_conversation_prompt(user_message, context_messages)
         
-        # Add conversation context if available (last 5 exchanges)
-        if context_messages:
-            messages.extend(context_messages)
+        # Prepare the payload for the API
+        payload = {
+            "inputs": prompt,
+            "parameters": {
+                "max_new_tokens": 500,
+                "temperature": 0.7,
+                "top_p": 0.95,
+                "do_sample": True,
+                "return_full_text": False
+            }
+        }
         
-        # Add the current user message
-        messages.append({
-            "role": "user",
-            "content": user_message
-        })
+        # Make the API request
+        response = requests.post(HF_API_URL, headers=HF_HEADERS, json=payload, timeout=30)
         
-        # Make the API call
-        completion = client.chat.completions.create(
-            model="microsoft/Phi-3-mini-4k-instruct",
-            messages=messages,
-            max_tokens=500,  # Limit response length
-            temperature=0.7  # Slight randomness for natural responses
-        )
-        
-        return completion.choices[0].message.content
+        # Check if request was successful
+        if response.status_code == 200:
+            result = response.json()
+            # Extract the generated text
+            if isinstance(result, list) and len(result) > 0:
+                return result[0].get('generated_text', "Sorry, I couldn't generate a response.")
+            elif isinstance(result, dict):
+                return result.get('generated_text', "Sorry, I couldn't generate a response.")
+            else:
+                return str(result)
+        else:
+            print(f"API Error {response.status_code}: {response.text}")
+            
+            # Handle rate limiting
+            if response.status_code == 429:
+                return "I'm getting too many requests right now. Please try again in a few moments."
+            # Handle model loading
+            elif response.status_code == 503:
+                return "The AI model is loading. Please try again in a few seconds."
+            else:
+                return f"Sorry, I'm having trouble thinking right now. (Error: {response.status_code})"
     
+    except requests.exceptions.Timeout:
+        print("Request timed out")
+        return "The request timed out. Please try again."
+    except requests.exceptions.ConnectionError:
+        print("Connection error")
+        return "I'm having trouble connecting to the AI service. Please check your internet connection."
     except Exception as e:
         print(f"Error getting AI response: {e}")
         return "Sorry, I'm having trouble thinking right now. Please try again later."
+
+def build_conversation_prompt(user_message, context_messages=None):
+    """
+    Build a prompt for the model with conversation history
+    """
+    prompt = ""
+    
+    # Add system message
+    prompt += "<|system|>\nYou are a helpful, friendly AI assistant on Discord. Keep responses concise but informative.\n"
+    
+    # Add conversation history if available
+    if context_messages:
+        for msg in context_messages[-10:]:  # Limit to last 10 messages for context
+            if msg["role"] == "user":
+                prompt += f"<|user|>\n{msg['content']}\n"
+            elif msg["role"] == "assistant":
+                prompt += f"<|assistant|>\n{msg['content']}\n"
+    
+    # Add current user message
+    prompt += f"<|user|>\n{user_message}\n"
+    prompt += "<|assistant|>\n"
+    
+    return prompt
 
 def get_conversation_context(channel_id, user_id=None):
     """
@@ -118,7 +163,7 @@ async def on_message(message):
             # Update conversation context
             update_conversation_context(message.channel.id, content, response, message.author.id)
         
-        # Reply to the message (this will mention the user who asked)
+        # Reply to the message
         await message.reply(response)
     
     # Check if this is a reply to the bot's message
@@ -143,10 +188,9 @@ async def on_message(message):
                 # Reply to the message
                 await message.reply(response)
     
-    # Process commands (if any)
+    # Process commands
     await bot.process_commands(message)
 
-# Optional: Command to clear conversation history for current channel/user
 @bot.command(name='clear')
 async def clear_context(ctx):
     """Clear conversation history for this channel"""
@@ -155,18 +199,27 @@ async def clear_context(ctx):
         del conversation_history[key]
     await ctx.send("✨ Conversation history cleared!")
 
-# Optional: Command to get bot info
 @bot.command(name='info')
 async def bot_info(ctx):
     """Show bot information"""
     embed = discord.Embed(
         title="AI Chat Bot Info",
-        description="I'm an AI-powered Discord bot that uses Hugging Face's inference API!",
+        description="I'm an AI-powered Discord bot using Hugging Face's inference API!",
         color=discord.Color.blue()
     )
     embed.add_field(name="How to use me", value="• Mention me with @bot then your question\n• Reply to any of my messages", inline=False)
     embed.add_field(name="Features", value="• Remembers conversation context\n• Responds to mentions and replies\n• Per-user conversation history", inline=False)
     await ctx.send(embed=embed)
+
+@bot.command(name='model')
+async def change_model(ctx, model_name=None):
+    """Change the AI model (owner only)"""
+    if not model_name:
+        await ctx.send("Current model: " + HF_API_URL.split('/')[-1])
+        return
+    
+    # This would require restarting the bot or updating the global variable
+    await ctx.send("Model changing is not fully implemented yet. Please restart the bot with a different model in the code.")
 
 # Run the bot
 if __name__ == "__main__":
@@ -181,5 +234,22 @@ if __name__ == "__main__":
         print("The AI functionality won't work without it!")
         print("Please add: HF_TOKEN=your_huggingface_token_here")
     else:
+        # Test the API connection
+        print("Testing Hugging Face API connection...")
+        test_payload = {
+            "inputs": "Hello",
+            "parameters": {"max_new_tokens": 10}
+        }
+        try:
+            test_response = requests.post(HF_API_URL, headers=HF_HEADERS, json=test_payload, timeout=10)
+            if test_response.status_code == 200:
+                print("✓ API connection successful!")
+            else:
+                print(f"⚠ API test returned status {test_response.status_code}")
+                print(f"  Response: {test_response.text[:200]}")
+        except Exception as e:
+            print(f"✗ API test failed: {e}")
+        
         # Run the bot
+        print("\nStarting Discord bot...")
         bot.run(DISCORD_TOKEN)
