@@ -17,29 +17,33 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 conversation_history = {}
 
 # Initialize the Hugging Face Inference Client
-# This automatically uses the router and handles provider selection [citation:3][citation:5]
 HF_TOKEN = os.environ.get("HF_TOKEN")
 if HF_TOKEN:
-    # The client automatically uses https://router.huggingface.co
     hf_client = InferenceClient(token=HF_TOKEN)
 else:
     print("Warning: HF_TOKEN not found in environment variables")
     hf_client = None
 
-# List of recommended models that work well with the router [citation:5]
+# List of models - put working ones first
 AVAILABLE_MODELS = [
-    "meta-llama/Llama-3.2-3B-Instruct",  # Fast, good for most tasks
-    "HuggingFaceH4/zephyr-7b-beta",      # Great for conversations
-    "microsoft/Phi-3-mini-4k-instruct",  # Small and efficient
-    "Qwen/Qwen2.5-7B-Instruct",          # Strong performance
+    "HuggingFaceH4/zephyr-7b-beta",      # Great for conversations - WORKS IMMEDIATELY
+    "microsoft/Phi-3-mini-4k-instruct",  # Small and efficient - WORKS IMMEDIATELY
+    "Qwen/Qwen2.5-7B-Instruct",          # Strong performance - WORKS IMMEDIATELY
+    "mistralai/Mistral-7B-Instruct-v0.3", # Popular and reliable
+    "google/gemma-2-2b-it",              # Google's model
+    # "meta-llama/Llama-3.2-3B-Instruct",  # Requires accepting license at huggingface.co/meta-llama/Llama-3.2-3B-Instruct
 ]
 
-async def get_ai_response(user_message, context_messages=None, model=AVAILABLE_MODELS[0]):
+async def get_ai_response(user_message, context_messages=None, model=None):
     """
     Get response from Hugging Face model using the router
     """
     if not hf_client:
         return "AI service is not configured. Please check your HF_TOKEN."
+    
+    # Use default model if none specified
+    if model is None:
+        model = AVAILABLE_MODELS[0]
 
     try:
         # Prepare messages for chat completion
@@ -48,7 +52,7 @@ async def get_ai_response(user_message, context_messages=None, model=AVAILABLE_M
         # Add system message
         messages.append({
             "role": "system",
-            "content": "You are a helpful, friendly AI assistant on Discord. Keep responses concise and conversational."
+            "content": "You are a helpful, friendly AI assistant on Discord. Keep responses concise (2-3 sentences) and conversational."
         })
         
         # Add conversation history (last 6 exchanges for context)
@@ -65,11 +69,11 @@ async def get_ai_response(user_message, context_messages=None, model=AVAILABLE_M
             "content": user_message
         })
         
-        # Use the chat_completion method which works with the router [citation:9]
+        # Use the chat_completion method which works with the router
         response = hf_client.chat_completion(
             model=model,
             messages=messages,
-            max_tokens=500,
+            max_tokens=300,  # Slightly reduced for faster responses
             temperature=0.7,
             top_p=0.95
         )
@@ -85,14 +89,17 @@ async def get_ai_response(user_message, context_messages=None, model=AVAILABLE_M
         
         # Common error handling
         error_str = str(e).lower()
-        if "rate limit" in error_str or "429" in error_str:
+        if "model_not_supported" in error_str or "not supported" in error_str:
+            return f"The model `{model.split('/')[-1]}` requires special access. Try `!model` to see available models."
+        elif "rate limit" in error_str or "429" in error_str:
             return "I'm receiving too many requests. Please try again in a moment."
         elif "loading" in error_str or "503" in error_str:
             return "The AI model is waking up. Please try again in 5-10 seconds."
         elif "token" in error_str or "401" in error_str:
             return "There's an issue with my API authentication. Please contact the bot administrator."
         else:
-            return f"Sorry, I encountered an error: {str(e)[:100]}"
+            # Don't expose technical errors to users
+            return "Sorry, I encountered an error. Please try again or use `!model` to switch to a different AI model."
 
 def get_conversation_context(channel_id, user_id=None):
     """Retrieve conversation history"""
@@ -113,6 +120,18 @@ def update_conversation_context(channel_id, user_message, bot_response, user_id=
     if len(conversation_history[key]) > 20:
         conversation_history[key] = conversation_history[key][-20:]
 
+def get_user_model(user_id, channel_id):
+    """Get the preferred model for a user"""
+    key = f"model_{channel_id}_{user_id}"
+    if key in conversation_history and isinstance(conversation_history[key], str):
+        return conversation_history[key]
+    return AVAILABLE_MODELS[0]  # Default to first working model
+
+def set_user_model(user_id, channel_id, model):
+    """Set the preferred model for a user"""
+    key = f"model_{channel_id}_{user_id}"
+    conversation_history[key] = model
+
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
@@ -121,13 +140,25 @@ async def on_ready():
     # Test HF connection
     if hf_client:
         print("✓ Hugging Face client initialized successfully")
+        print(f"✓ Default model: {AVAILABLE_MODELS[0].split('/')[-1]}")
+        
+        # Optional: Test the API with a quick call
+        try:
+            test_response = hf_client.chat_completion(
+                model=AVAILABLE_MODELS[0],
+                messages=[{"role": "user", "content": "Say OK"}],
+                max_tokens=5
+            )
+            print("✓ API test successful!")
+        except Exception as e:
+            print(f"⚠ API test warning: {str(e)[:100]}")
     else:
         print("✗ Hugging Face client failed to initialize")
     
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.listening,
-            name="mentions | !info"
+            name="@mention | !info"
         )
     )
 
@@ -146,7 +177,8 @@ async def on_message(message):
         
         async with message.channel.typing():
             context = get_conversation_context(message.channel.id, message.author.id)
-            response = await get_ai_response(content, context)
+            user_model = get_user_model(message.author.id, message.channel.id)
+            response = await get_ai_response(content, context, user_model)
             update_conversation_context(message.channel.id, content, response, message.author.id)
         
         await message.reply(response)
@@ -159,7 +191,8 @@ async def on_message(message):
             if content:
                 async with message.channel.typing():
                     context = get_conversation_context(message.channel.id, message.author.id)
-                    response = await get_ai_response(content, context)
+                    user_model = get_user_model(message.author.id, message.channel.id)
+                    response = await get_ai_response(content, context, user_model)
                     update_conversation_context(message.channel.id, content, response, message.author.id)
                 await message.reply(response)
     
@@ -167,42 +200,65 @@ async def on_message(message):
 
 @bot.command(name='clear')
 async def clear_context(ctx):
-    """Clear conversation history"""
+    """Clear your conversation history"""
     key = f"{ctx.channel.id}_{ctx.author.id}"
     if key in conversation_history:
         del conversation_history[key]
-    await ctx.send("✨ Conversation history cleared!")
+    await ctx.send("✨ Your conversation history has been cleared!")
 
 @bot.command(name='model')
 async def switch_model(ctx, model_choice: str = None):
-    """Switch between available AI models"""
-    if not model_choice:
-        model_list = "\n".join([f"• `{i}`: {model.split('/')[-1]}" for i, model in enumerate(AVAILABLE_MODELS)])
-        await ctx.send(f"Available models:\n{model_list}\n\nUsage: `!model 0` to select the first model")
+    """Switch between available AI models. Usage: !model 0 or !model list"""
+    
+    if not model_choice or model_choice.lower() == 'list':
+        current_model = get_user_model(ctx.author.id, ctx.channel.id)
+        model_list = "\n".join([f"`{i}`: {model.split('/')[-1]}" for i, model in enumerate(AVAILABLE_MODELS)])
+        
+        embed = discord.Embed(
+            title="🤖 Available AI Models",
+            description=f"Currently using: **{current_model.split('/')[-1]}**\n\n{model_list}",
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text="Use !model <number> to switch (e.g., !model 0)")
+        await ctx.send(embed=embed)
         return
     
     try:
         index = int(model_choice)
         if 0 <= index < len(AVAILABLE_MODELS):
-            # Store the selected model for this user/channel
-            key = f"model_{ctx.channel.id}_{ctx.author.id}"
-            conversation_history[key] = AVAILABLE_MODELS[index]
-            await ctx.send(f"✅ Switched to model: **{AVAILABLE_MODELS[index].split('/')[-1]}**")
+            selected_model = AVAILABLE_MODELS[index]
+            set_user_model(ctx.author.id, ctx.channel.id, selected_model)
+            await ctx.send(f"✅ Switched to model: **{selected_model.split('/')[-1]}**\n"
+                          f"Use `!model` to see all options or just mention me to start chatting!")
         else:
-            await ctx.send(f"Invalid model number. Choose 0-{len(AVAILABLE_MODELS)-1}")
+            await ctx.send(f"❌ Invalid model number. Choose 0-{len(AVAILABLE_MODELS)-1}")
     except ValueError:
-        await ctx.send("Please provide a number. Use `!model` to see available models.")
+        await ctx.send("❌ Please provide a number. Use `!model` to see available models.")
 
 @bot.command(name='info')
 async def bot_info(ctx):
     """Show bot information"""
+    current_model = get_user_model(ctx.author.id, ctx.channel.id)
+    
     embed = discord.Embed(
-        title="AI Chat Bot",
-        description="Powered by Hugging Face Inference Providers",
+        title="🤖 AI Chat Bot",
+        description="Powered by Hugging Face Inference API",
         color=discord.Color.blue()
     )
-    embed.add_field(name="How to use", value="• Mention me with `@bot` then your question\n• Reply to any of my messages", inline=False)
-    embed.add_field(name="Features", value="• Remembers conversation context\n• Multiple AI models available\n• Fast response times", inline=False)
+    embed.add_field(name="📝 How to use", 
+                   value="• **Mention me**: `@bot your question`\n• **Reply**: Reply to any of my messages", 
+                   inline=False)
+    embed.add_field(name="✨ Features", 
+                   value="• Remembers conversation context\n• Multiple AI models available\n• Per-user model preferences", 
+                   inline=False)
+    embed.add_field(name="🎮 Commands", 
+                   value="`!model` - Switch AI models\n`!clear` - Clear chat history\n`!info` - Show this info", 
+                   inline=False)
+    embed.add_field(name="🧠 Current Model", 
+                   value=f"`{current_model.split('/')[-1]}`\nUse `!model` to change it", 
+                   inline=False)
+    embed.set_footer(text="Your conversations are private and not stored permanently")
+    
     await ctx.send(embed=embed)
 
 # Run the bot
