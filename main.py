@@ -22,7 +22,7 @@ if HF_TOKEN:
     # Use Together AI as provider (supports many models including Llama and Zephyr)
     # Other options: "cerebras", "groq", "nebius", "sambanova", "fireworks-ai", etc.
     hf_client = InferenceClient(
-        provider="together",  # Specify a provider that supports many models
+        provider="featherless-ai",  # Specify a provider that supports many models
         api_key=HF_TOKEN
     )
 else:
@@ -31,7 +31,7 @@ else:
 
 # Models that work with Together AI provider
 AVAILABLE_MODELS = [
-    "meta-llama/Llama-3.2-3B-Instruct",     # ✅ Works with Together AI
+    "dphn/Dolphin-Mistral-24B-Venice-Edition",     # ✅ Works with Together AI
     "meta-llama/Llama-3.1-8B-Instruct",     # ✅ Works with Together AI  
     "mistralai/Mistral-7B-Instruct-v0.3",   # ✅ Works with Together AI
     "Qwen/Qwen2.5-7B-Instruct",             # ✅ Works with Together AI
