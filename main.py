@@ -9,7 +9,7 @@ load_dotenv()
 
 # Initialize OpenAI client for Hugging Face inference
 client = OpenAI(
-    base_url="https://router.huggingface.co/hf-inference/v1",
+    base_url="https://api-inference.huggingface.co/v1",
     api_key=os.environ.get("HF_TOKEN"),
 )
 
