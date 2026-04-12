@@ -18,7 +18,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 conversation_history = {}
 
 # Hugging Face API configuration
-HF_API_URL = "https://api-inference.huggingface.co/models/microsoft/Phi-3-mini-4k-instruct"
+HF_API_URL = "https://router.huggingface.co/models/microsoft/Phi-3-mini-4k-instruct"
 HF_HEADERS = {"Authorization": f"Bearer {os.environ.get('HF_TOKEN')}"}
 
 async def get_ai_response(user_message, context_messages=None):
