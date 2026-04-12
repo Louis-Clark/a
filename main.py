@@ -16,32 +16,35 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # Store conversation history
 conversation_history = {}
 
-# Initialize the Hugging Face Inference Client
+# Initialize the Hugging Face Inference Client with a specific provider
 HF_TOKEN = os.environ.get("HF_TOKEN")
 if HF_TOKEN:
-    hf_client = InferenceClient(token=HF_TOKEN)
+    # Use Together AI as provider (supports many models including Llama and Zephyr)
+    # Other options: "cerebras", "groq", "nebius", "sambanova", "fireworks-ai", etc.
+    hf_client = InferenceClient(
+        provider="together",  # Specify a provider that supports many models
+        api_key=HF_TOKEN
+    )
 else:
     print("Warning: HF_TOKEN not found in environment variables")
     hf_client = None
 
-# List of models - put working ones first
+# Models that work with Together AI provider
 AVAILABLE_MODELS = [
-    "HuggingFaceH4/zephyr-7b-beta",      # Great for conversations - WORKS IMMEDIATELY
-    "microsoft/Phi-3-mini-4k-instruct",  # Small and efficient - WORKS IMMEDIATELY
-    "Qwen/Qwen2.5-7B-Instruct",          # Strong performance - WORKS IMMEDIATELY
-    "mistralai/Mistral-7B-Instruct-v0.3", # Popular and reliable
-    "google/gemma-2-2b-it",              # Google's model
-    # "meta-llama/Llama-3.2-3B-Instruct",  # Requires accepting license at huggingface.co/meta-llama/Llama-3.2-3B-Instruct
+    "meta-llama/Llama-3.2-3B-Instruct",     # ✅ Works with Together AI
+    "meta-llama/Llama-3.1-8B-Instruct",     # ✅ Works with Together AI  
+    "mistralai/Mistral-7B-Instruct-v0.3",   # ✅ Works with Together AI
+    "Qwen/Qwen2.5-7B-Instruct",             # ✅ Works with Together AI
+    "HuggingFaceH4/zephyr-7b-beta",         # ✅ Should work with Together AI
 ]
 
 async def get_ai_response(user_message, context_messages=None, model=None):
     """
-    Get response from Hugging Face model using the router
+    Get response from Hugging Face model using specified provider
     """
     if not hf_client:
         return "AI service is not configured. Please check your HF_TOKEN."
     
-    # Use default model if none specified
     if model is None:
         model = AVAILABLE_MODELS[0]
 
@@ -52,10 +55,10 @@ async def get_ai_response(user_message, context_messages=None, model=None):
         # Add system message
         messages.append({
             "role": "system",
-            "content": "You are a helpful, friendly AI assistant on Discord. Keep responses concise (2-3 sentences) and conversational."
+            "content": "You are a helpful, friendly AI assistant on Discord. Keep responses concise and conversational."
         })
         
-        # Add conversation history (last 6 exchanges for context)
+        # Add conversation history (last 6 exchanges)
         if context_messages:
             for msg in context_messages[-6:]:
                 messages.append({
@@ -69,16 +72,15 @@ async def get_ai_response(user_message, context_messages=None, model=None):
             "content": user_message
         })
         
-        # Use the chat_completion method which works with the router
+        # Make the API call with the specific provider
         response = hf_client.chat_completion(
             model=model,
             messages=messages,
-            max_tokens=300,  # Slightly reduced for faster responses
+            max_tokens=300,
             temperature=0.7,
             top_p=0.95
         )
         
-        # Extract the response text
         if response and response.choices:
             return response.choices[0].message.content
         else:
@@ -87,19 +89,17 @@ async def get_ai_response(user_message, context_messages=None, model=None):
     except Exception as e:
         print(f"Error details: {type(e).__name__}: {e}")
         
-        # Common error handling
         error_str = str(e).lower()
-        if "model_not_supported" in error_str or "not supported" in error_str:
-            return f"The model `{model.split('/')[-1]}` requires special access. Try `!model` to see available models."
-        elif "rate limit" in error_str or "429" in error_str:
+        if "rate limit" in error_str or "429" in error_str:
             return "I'm receiving too many requests. Please try again in a moment."
         elif "loading" in error_str or "503" in error_str:
             return "The AI model is waking up. Please try again in 5-10 seconds."
         elif "token" in error_str or "401" in error_str:
             return "There's an issue with my API authentication. Please contact the bot administrator."
+        elif "not supported" in error_str:
+            return f"The model `{model.split('/')[-1]}` is not supported by the current provider. Try `!model` to see available models."
         else:
-            # Don't expose technical errors to users
-            return "Sorry, I encountered an error. Please try again or use `!model` to switch to a different AI model."
+            return f"Sorry, I encountered an error. Please try again or use `!model` to switch models."
 
 def get_conversation_context(channel_id, user_id=None):
     """Retrieve conversation history"""
@@ -116,7 +116,6 @@ def update_conversation_context(channel_id, user_message, bot_response, user_id=
     conversation_history[key].append({"role": "user", "content": user_message})
     conversation_history[key].append({"role": "assistant", "content": bot_response})
     
-    # Keep only last 10 exchanges
     if len(conversation_history[key]) > 20:
         conversation_history[key] = conversation_history[key][-20:]
 
@@ -125,7 +124,7 @@ def get_user_model(user_id, channel_id):
     key = f"model_{channel_id}_{user_id}"
     if key in conversation_history and isinstance(conversation_history[key], str):
         return conversation_history[key]
-    return AVAILABLE_MODELS[0]  # Default to first working model
+    return AVAILABLE_MODELS[0]
 
 def set_user_model(user_id, channel_id, model):
     """Set the preferred model for a user"""
@@ -137,12 +136,12 @@ async def on_ready():
     print(f'{bot.user} has connected to Discord!')
     print(f'Bot is in {len(bot.guilds)} guilds')
     
-    # Test HF connection
     if hf_client:
         print("✓ Hugging Face client initialized successfully")
+        print(f"✓ Using provider: together")
         print(f"✓ Default model: {AVAILABLE_MODELS[0].split('/')[-1]}")
         
-        # Optional: Test the API with a quick call
+        # Test the API
         try:
             test_response = hf_client.chat_completion(
                 model=AVAILABLE_MODELS[0],
@@ -158,7 +157,7 @@ async def on_ready():
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.listening,
-            name="@mention | !info"
+            name="@mention | !model"
         )
     )
 
@@ -208,7 +207,7 @@ async def clear_context(ctx):
 
 @bot.command(name='model')
 async def switch_model(ctx, model_choice: str = None):
-    """Switch between available AI models. Usage: !model 0 or !model list"""
+    """Switch between available AI models. Usage: !model 0"""
     
     if not model_choice or model_choice.lower() == 'list':
         current_model = get_user_model(ctx.author.id, ctx.channel.id)
@@ -228,12 +227,28 @@ async def switch_model(ctx, model_choice: str = None):
         if 0 <= index < len(AVAILABLE_MODELS):
             selected_model = AVAILABLE_MODELS[index]
             set_user_model(ctx.author.id, ctx.channel.id, selected_model)
-            await ctx.send(f"✅ Switched to model: **{selected_model.split('/')[-1]}**\n"
-                          f"Use `!model` to see all options or just mention me to start chatting!")
+            await ctx.send(f"✅ Switched to model: **{selected_model.split('/')[-1]}**")
         else:
             await ctx.send(f"❌ Invalid model number. Choose 0-{len(AVAILABLE_MODELS)-1}")
     except ValueError:
         await ctx.send("❌ Please provide a number. Use `!model` to see available models.")
+
+@bot.command(name='provider')
+async def switch_provider(ctx, provider_name: str = None):
+    """Switch between inference providers. Usage: !provider together"""
+    
+    providers = ["together", "cerebras", "groq", "nebius", "sambanova", "fireworks-ai"]
+    
+    if not provider_name:
+        await ctx.send(f"Available providers: {', '.join(providers)}\nCurrent: together")
+        return
+    
+    if provider_name in providers:
+        global hf_client
+        hf_client = InferenceClient(provider=provider_name, api_key=HF_TOKEN)
+        await ctx.send(f"✅ Switched to provider: **{provider_name}**")
+    else:
+        await ctx.send(f"❌ Invalid provider. Choose from: {', '.join(providers)}")
 
 @bot.command(name='info')
 async def bot_info(ctx):
@@ -242,22 +257,21 @@ async def bot_info(ctx):
     
     embed = discord.Embed(
         title="🤖 AI Chat Bot",
-        description="Powered by Hugging Face Inference API",
+        description="Powered by Hugging Face Inference API with Together AI",
         color=discord.Color.blue()
     )
     embed.add_field(name="📝 How to use", 
                    value="• **Mention me**: `@bot your question`\n• **Reply**: Reply to any of my messages", 
                    inline=False)
     embed.add_field(name="✨ Features", 
-                   value="• Remembers conversation context\n• Multiple AI models available\n• Per-user model preferences", 
+                   value="• Remembers conversation context\n• Multiple AI models available\n• Multiple provider support", 
                    inline=False)
     embed.add_field(name="🎮 Commands", 
-                   value="`!model` - Switch AI models\n`!clear` - Clear chat history\n`!info` - Show this info", 
+                   value="`!model` - Switch AI models\n`!provider` - Switch providers\n`!clear` - Clear history\n`!info` - Show this", 
                    inline=False)
     embed.add_field(name="🧠 Current Model", 
-                   value=f"`{current_model.split('/')[-1]}`\nUse `!model` to change it", 
+                   value=f"`{current_model.split('/')[-1]}`", 
                    inline=False)
-    embed.set_footer(text="Your conversations are private and not stored permanently")
     
     await ctx.send(embed=embed)
 
