@@ -42,7 +42,7 @@ async def get_ai_response(user_message, context_messages=None):
         
         # Make the API call
         completion = client.chat.completions.create(
-            model="cognitivecomputations/dolphin-2.6-mixtral-8x7b",
+            model="microsoft/Phi-3-mini-4k-instruct",
             messages=messages,
             max_tokens=500,  # Limit response length
             temperature=0.7  # Slight randomness for natural responses
