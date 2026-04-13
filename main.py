@@ -161,6 +161,36 @@ async def on_ready():
         )
     )
 
+async def replace_mentions_with_names(content, message):
+    """Replace user mentions with their server nicknames or usernames"""
+    modified_content = content
+    # Find all user mentions in the message
+    mention_pattern = r'<@!?(\d+)>'
+    mentions_found = re.findall(mention_pattern, content)
+    
+    mention_map = {}  # Store mapping of user_id -> name for later conversion back
+    
+    for user_id_str in mentions_found:
+        user_id = int(user_id_str)
+        user = message.guild.get_member(user_id) if message.guild else await bot.fetch_user(user_id)
+        if user:
+            # Get nickname if in a guild, otherwise username
+            name = user.nick if hasattr(user, 'nick') and user.nick else user.name
+            mention_map[user_id_str] = name
+            # Replace the mention with the name
+            modified_content = modified_content.replace(f'<@{user_id}>', name).replace(f'<@!{user_id}>', name)
+    
+    return modified_content, mention_map
+
+async def replace_names_with_mentions(response, mention_map, message):
+    """Replace names back to mentions in the AI response"""
+    modified_response = response
+    for user_id_str, name in mention_map.items():
+        # Replace the name with the mention (case-insensitive)
+        pattern = re.compile(re.escape(name), re.IGNORECASE)
+        modified_response = pattern.sub(f'<@{user_id_str}>', modified_response)
+    return modified_response
+
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
@@ -170,6 +200,9 @@ async def on_message(message):
     if bot.user in message.mentions:
         content = message.content.replace(f'<@{bot.user.id}>', '').replace(f'<@!{bot.user.id}>', '').strip()
         
+        # Replace other user mentions with names
+        content, mention_map = await replace_mentions_with_names(content, message)
+        
         if not content:
             await message.reply("Hello! What would you like to talk about?")
             return
@@ -178,6 +211,10 @@ async def on_message(message):
             context = get_conversation_context(message.channel.id, message.author.id)
             user_model = get_user_model(message.author.id, message.channel.id)
             response = await get_ai_response(content, context, user_model)
+            
+            # Convert names back to mentions in the response
+            response = await replace_names_with_mentions(response, mention_map, message)
+            
             update_conversation_context(message.channel.id, content, response, message.author.id)
         
         await message.reply(response)
@@ -188,10 +225,17 @@ async def on_message(message):
         if referenced_msg.author == bot.user:
             content = message.content.strip()
             if content:
+                # Replace other user mentions with names
+                content, mention_map = await replace_mentions_with_names(content, message)
+                
                 async with message.channel.typing():
                     context = get_conversation_context(message.channel.id, message.author.id)
                     user_model = get_user_model(message.author.id, message.channel.id)
                     response = await get_ai_response(content, context, user_model)
+                    
+                    # Convert names back to mentions in the response
+                    response = await replace_names_with_mentions(response, mention_map, message)
+                    
                     update_conversation_context(message.channel.id, content, response, message.author.id)
                 await message.reply(response)
     
